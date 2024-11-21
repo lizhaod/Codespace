@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+
+import csv
+import concurrent.futures
+from jnpr.junos import Device
+from jnpr.junos.exception import ConnectError
+from rich.console import Console
+from rich.table import Table
+from rich.prompt import Prompt
+from rich import print as rprint
+import sys
+import logging
+from getpass import getpass
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+console = Console()
+
+def load_devices():
+    """Load device information from CSV file."""
+    try:
+        devices = []
+        with open('devices.csv', 'r') as file:
+            csv_reader = csv.DictReader(file)
+            for row in csv_reader:
+                devices.append(row)
+        return devices
+    except Exception as e:
+        logger.error(f"Error loading devices configuration: {str(e)}")
+        sys.exit(1)
+
+def get_credentials():
+    """Prompt for username and password."""
+    console.print("\n[bold blue]Enter credentials for device access:[/bold blue]")
+    username = Prompt.ask("Username")
+    password = getpass("Password: ")
+    return username, password
+
+def execute_command(device_info, command, credentials):
+    """Execute command on a single device and return the result."""
+    username, password = credentials
+    try:
+        with Device(host=device_info['host'],
+                   user=username,
+                   password=password) as dev:
+            
+            # Execute command based on type
+            if command.startswith('show'):
+                result = dev.cli(command, warning=False)
+            else:
+                # For configuration commands
+                with dev.config(mode='exclusive') as cu:
+                    cu.load(command, format='set')
+                    cu.commit()
+                result = "Configuration committed successfully"
+                
+            return {
+                'device': device_info['name'],
+                'status': 'success',
+                'output': result
+            }
+    except ConnectError as e:
+        return {
+            'device': device_info['name'],
+            'status': 'error',
+            'output': f"Connection error: {str(e)}"
+        }
+    except Exception as e:
+        return {
+            'device': device_info['name'],
+            'status': 'error',
+            'output': f"Error: {str(e)}"
+        }
+
+def display_results(results):
+    """Display results in a formatted table."""
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("Device")
+    table.add_column("Status")
+    table.add_column("Output")
+
+    for result in results:
+        status_color = "green" if result['status'] == 'success' else "red"
+        table.add_row(
+            result['device'],
+            f"[{status_color}]{result['status']}[/{status_color}]",
+            result['output']
+        )
+
+    console.print(table)
+
+def main():
+    """Main function to run the CLI tool."""
+    devices = load_devices()
+    
+    console.print("[bold blue]Junos Multi-Device CLI Tool[/bold blue]")
+    credentials = get_credentials()
+    
+    console.print("\nType 'exit' to quit the program\n")
+
+    while True:
+        try:
+            command = Prompt.ask("[yellow]Enter command[/yellow]")
+            
+            if command.lower() == 'exit':
+                break
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(devices)) as executor:
+                future_to_device = {
+                    executor.submit(execute_command, device, command, credentials): device
+                    for device in devices
+                }
+                
+                results = []
+                for future in concurrent.futures.as_completed(future_to_device):
+                    result = future.result()
+                    results.append(result)
+
+            display_results(results)
+
+        except KeyboardInterrupt:
+            console.print("\n[red]Program interrupted by user[/red]")
+            break
+        except Exception as e:
+            console.print(f"[red]Error: {str(e)}[/red]")
+
+if __name__ == "__main__":
+    main()
