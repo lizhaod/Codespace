@@ -121,12 +121,43 @@ def execute_command(device_info, command, credentials):
             # Log connection attempt
             logger.info(f"Connecting to {device_info['name']} ({device_info['host']})")
             
-            with Device(host=device_info['host'],
-                    user=username,
-                    password=password,
-                    auto_add_policy=True,  # Automatically accept SSH host keys
-                    port=22) as dev:
-                
+            # Enhanced SSH connection parameters
+            ssh_config = {
+                'StrictHostKeyChecking': 'no',
+                'UserKnownHostsFile': '/dev/null',
+                'ServerAliveInterval': '30',
+                'ServerAliveCountMax': '5',
+                'TCPKeepAlive': 'yes',
+                'ControlMaster': 'auto',
+                'ControlPersist': '10m',
+                'ConnectTimeout': '300',
+                'ConnectionAttempts': '3',
+                'GSSAPIAuthentication': 'no',
+                'PreferredAuthentications': 'password,keyboard-interactive',
+                'NumberOfPasswordPrompts': '3',
+                'KexAlgorithms': '+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1',
+                'Ciphers': '+aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc',
+                'HostKeyAlgorithms': '+ssh-rsa,ssh-dss',
+                'PubkeyAcceptedKeyTypes': '+ssh-rsa,ssh-dss'
+            }
+            
+            # Device connection with extended parameters
+            dev = Device(
+                host=device_info['host'],
+                user=username,
+                password=password,
+                port=22,
+                gather_facts=False,  # Skip fact gathering for faster connection
+                normalize=True,
+                timeout=300,  # Connection timeout in seconds (5 minutes)
+                attempts=3,   # Number of connection attempts
+                auto_probe=30,  # Auto probe every 30 seconds
+                ssh_config=None,  # Using custom ssh_options instead
+                ssh_private_key_file=None,
+                ssh_options=ssh_config
+            )
+            
+            with dev:
                 # Execute command based on type
                 if base_command.startswith('show'):
                     result = dev.cli(base_command, warning=False)
@@ -150,6 +181,7 @@ def execute_command(device_info, command, credentials):
                     'status': 'success',
                     'output': result
                 }
+                
     except ConnectError as e:
         error_msg = f"Connection error: {str(e)}"
         logger.error(f"Failed to connect to {device_info['name']} ({device_info['host']}): {error_msg}")
