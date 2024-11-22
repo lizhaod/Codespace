@@ -286,38 +286,48 @@ class LogCapture:
                 if "ERROR" in message or "WARNING" in message:
                     console.print(message)
 
-def parse_arguments():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='Junos Multi-Device CLI Tool')
-    parser.add_argument('-s', '--site', 
-                      help='Filter devices by site code (case-insensitive)',
-                      default='')
-    parser.add_argument('-o', '--output',
-                      help='Output file path (supports .json, .txt, or .csv formats)',
-                      default='')
-    return parser.parse_args()
+def find_devices_file():
+    """Find the devices.csv file in either current directory or script directory."""
+    # Try current working directory first
+    cwd_path = os.path.join(os.getcwd(), 'devices.csv')
+    if os.path.exists(cwd_path):
+        return cwd_path
+        
+    # Try script directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_path = os.path.join(script_dir, 'devices.csv')
+    if os.path.exists(script_path):
+        return script_path
+        
+    return None
 
-def load_devices(site_filter=''):
+def load_devices(site=None):
     """Load device information from CSV file."""
+    devices = []
+    
+    # Find devices.csv file
+    devices_file = find_devices_file()
+    if not devices_file:
+        console.print("[red]Error: devices.csv not found in current directory or script directory[/red]")
+        console.print("[blue]Please ensure devices.csv exists in one of these locations:[/blue]")
+        console.print(f"[blue]1. Current directory: {os.getcwd()}[/blue]")
+        console.print(f"[blue]2. Script directory: {os.path.dirname(os.path.abspath(__file__))}[/blue]")
+        return []
+    
     try:
-        devices = []
-        with open('devices.csv', 'r') as file:
-            csv_reader = csv.DictReader(file)
-            for row in csv_reader:
-                # If host is empty, use the hostname (name) instead
-                if not row['host'].strip():
-                    row['host'] = row['name']
-                
-                # Apply site filter if specified
-                if site_filter:
-                    if site_filter.lower() in row['name'].lower():
-                        devices.append(row)
-                else:
-                    devices.append(row)
+        with open(devices_file, 'r') as f:
+            for line in f:
+                if line.strip() and not line.startswith('#'):
+                    name, host = line.strip().split(',')
+                    if site is None or site.lower() in name.lower():
+                        devices.append({
+                            'name': name.strip(),
+                            'host': host.strip()
+                        })
         return devices
     except Exception as e:
         logger.error(f"Error loading devices configuration: {str(e)}")
-        sys.exit(1)
+        return []
 
 def get_credentials():
     """Prompt for username and password."""
@@ -554,6 +564,17 @@ def display_results(results, output_file=None):
     # Save results if output file is specified
     if output_file:
         save_results(results, output_file)
+
+def parse_arguments():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description='Junos Multi-Device CLI Tool')
+    parser.add_argument('-s', '--site', 
+                      help='Filter devices by site code (case-insensitive)',
+                      default='')
+    parser.add_argument('-o', '--output',
+                      help='Output file path (supports .json, .txt, or .csv formats)',
+                      default='')
+    return parser.parse_args()
 
 def main():
     """Main function to run the CLI tool."""
