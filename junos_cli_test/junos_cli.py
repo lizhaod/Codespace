@@ -42,14 +42,17 @@ class LogCapture:
     def __init__(self):
         self.messages = []
         self.handler = None
+        self.has_error = False
 
     def emit(self, record):
+        if record.levelno >= logging.ERROR:
+            self.has_error = True
         self.messages.append(self.handler.format(record))
 
     def __enter__(self):
         # Create a handler that stores messages
         self.handler = logging.StreamHandler()
-        self.handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+        self.handler.setFormatter(logging.Formatter('%(message)s'))
         self.handler.emit = self.emit
         
         # Remove existing handlers and add our capture handler
@@ -63,9 +66,12 @@ class LogCapture:
         logger.addHandler(logging.StreamHandler())
         
     def display_logs(self):
-        """Display all captured log messages."""
-        for message in self.messages:
-            console.print(message)
+        """Display all captured log messages only if errors occurred."""
+        if self.has_error:
+            console.print("\n[bold red]Connection Errors:[/bold red]")
+            for message in self.messages:
+                if "ERROR" in message or "WARNING" in message:
+                    console.print(message)
 
 def parse_arguments():
     """Parse command line arguments."""
@@ -155,9 +161,6 @@ def execute_command(device_info, command, credentials):
         """Try to connect using specified port."""
         try:
             with suppress_junos_logs():
-                # Log connection attempt
-                logger.info(f"Connecting to {device_info['name']} ({device_info['host']}) on port {port}")
-                
                 # Update device parameters with current port
                 dev_params = device_params.copy()
                 dev_params['port'] = port
@@ -191,26 +194,25 @@ def execute_command(device_info, command, credentials):
                     }
                     
         except ConnectError as e:
-            logger.warning(f"Failed to connect on port {port}: {str(e)}")
+            logger.error(f"Connection failed on port {port} for {device_info['name']} ({device_info['host']}): {str(e)}")
             return None
         except Exception as e:
-            logger.error(f"Error on port {port}: {str(e)}")
+            logger.error(f"Error on port {port} for {device_info['name']} ({device_info['host']}): {str(e)}")
             return None
-    
+
     # Try NETCONF port first (830)
     result = try_connection(830)
     if result:
         return result
         
     # Fallback to SSH port (22)
-    logger.info(f"Retrying connection to {device_info['name']} using SSH port 22")
     result = try_connection(22)
     if result:
         return result
-    
+
     # If both attempts fail, return error
     error_msg = "Failed to connect on both NETCONF (830) and SSH (22) ports"
-    logger.error(f"{error_msg} for device {device_info['name']} ({device_info['host']})")
+    logger.error(f"{error_msg} for {device_info['name']} ({device_info['host']})")
     return {
         'device': device_info['name'],
         'status': 'error',
@@ -221,66 +223,57 @@ def execute_commands_with_progress(devices, command, credentials):
     """Execute commands on all devices with a progress bar."""
     results = []
     
-    # Capture logs during execution
-    with LogCapture() as log_capture:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TimeRemainingColumn(),
-            console=console
-        ) as progress:
-            # Create the main task
-            overall_task = progress.add_task(
-                f"[cyan]Executing command on {len(devices)} devices...",
-                total=len(devices)
-            )
-            
-            # Create a dict to store device-specific tasks
-            device_tasks = {
-                device['name']: progress.add_task(
-                    f"[yellow]{device['name']} ({device['host']})",
-                    total=1,
-                    visible=False
-                )
-                for device in devices
-            }
-            
-            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-                future_to_device = {}
-                
-                # Submit all tasks
-                for device in devices:
-                    future = executor.submit(execute_command, device, command, credentials)
-                    future_to_device[future] = device
-                    # Make the device task visible when it starts
-                    progress.update(device_tasks[device['name']], visible=True)
-                
-                # Process completed tasks
-                for future in concurrent.futures.as_completed(future_to_device):
-                    device = future_to_device[future]
-                    try:
-                        result = future.result()
-                        # Update progress for the device
-                        progress.update(device_tasks[device['name']], advance=1)
-                        # Update overall progress
-                        progress.update(overall_task, advance=1)
-                        results.append(result)
-                    except Exception as e:
-                        logger.error(f"Error processing {device['name']}: {str(e)}")
-                        results.append({
-                            'device': device['name'],
-                            'status': 'error',
-                            'output': f"Error: {str(e)}"
-                        })
-                    finally:
-                        # Hide completed device task
-                        progress.update(device_tasks[device['name']], visible=False)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+        console=console
+    ) as progress:
+        # Create the main task
+        overall_task = progress.add_task(
+            f"[cyan]Executing command on {len(devices)} devices...",
+            total=len(devices)
+        )
         
-        # Display captured logs after progress bar is done
-        console.print("\n[bold blue]Connection Logs:[/bold blue]")
-        log_capture.display_logs()
+        # Create a dict to store device-specific tasks
+        device_tasks = {
+            device['name']: progress.add_task(
+                f"[yellow]{device['name']} ({device['host']})",
+                total=1,
+                visible=True
+            )
+            for device in devices
+        }
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_device = {}
+            
+            # Submit all tasks
+            for device in devices:
+                future = executor.submit(execute_command, device, command, credentials)
+                future_to_device[future] = device
+            
+            # Process completed tasks
+            for future in concurrent.futures.as_completed(future_to_device):
+                device = future_to_device[future]
+                try:
+                    result = future.result()
+                    # Update progress for the device
+                    progress.update(device_tasks[device['name']], advance=1)
+                    # Update overall progress
+                    progress.update(overall_task, advance=1)
+                    results.append(result)
+                except Exception as e:
+                    results.append({
+                        'device': device['name'],
+                        'status': 'error',
+                        'output': f"Error: {str(e)}"
+                    })
+                finally:
+                    # Hide completed device task
+                    progress.update(device_tasks[device['name']], visible=False)
     
     return results
 
