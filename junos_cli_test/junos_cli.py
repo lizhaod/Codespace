@@ -54,6 +54,10 @@ def load_devices(site_filter=''):
         with open('devices.csv', 'r') as file:
             csv_reader = csv.DictReader(file)
             for row in csv_reader:
+                # If host is empty, use the hostname (name) instead
+                if not row['host'].strip():
+                    row['host'] = row['name']
+                
                 # Apply site filter if specified
                 if site_filter:
                     if site_filter.lower() in row['name'].lower():
@@ -83,6 +87,9 @@ def execute_command(device_info, command, credentials):
     
     try:
         with suppress_junos_logs():
+            # Log connection attempt
+            logger.info(f"Connecting to {device_info['name']} ({device_info['host']})")
+            
             with Device(host=device_info['host'],
                     user=username,
                     password=password,
@@ -113,16 +120,20 @@ def execute_command(device_info, command, credentials):
                     'output': result
                 }
     except ConnectError as e:
+        error_msg = f"Connection error: {str(e)}"
+        logger.error(f"Failed to connect to {device_info['name']} ({device_info['host']}): {error_msg}")
         return {
             'device': device_info['name'],
             'status': 'error',
-            'output': f"Connection error: {str(e)}"
+            'output': error_msg
         }
     except Exception as e:
+        error_msg = f"Error: {str(e)}"
+        logger.error(f"Error with {device_info['name']} ({device_info['host']}): {error_msg}")
         return {
             'device': device_info['name'],
             'status': 'error',
-            'output': f"Error: {str(e)}"
+            'output': error_msg
         }
 
 def save_results(results, output_file):

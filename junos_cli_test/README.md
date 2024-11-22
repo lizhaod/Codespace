@@ -64,15 +64,25 @@ When using the `-o` option, the following formats are supported:
 
 Edit `devices.csv` to add your devices. The file should be in CSV format with the following columns:
 - name: Device name for identification (can include site code)
-- host: IP address or hostname
+- host: IP address or hostname (optional - if empty, the name will be used as the hostname)
 
 Example `devices.csv`:
 ```csv
 name,host
 NYC-router1,192.168.1.1
-NYC-router2,192.168.1.2
-LAX-router1,192.168.1.3
+NYC-router2,10.0.0.2
+LAX-router1,
+BOS-router1,
 ```
+
+In this example:
+- NYC-router1 and NYC-router2 will be accessed using their IP addresses
+- LAX-router1 and BOS-router1 will be accessed using their hostnames directly
+
+This flexibility allows you to:
+- Use IP addresses when DNS is not available or for specific routing requirements
+- Use hostnames when DNS is properly configured or in environments with dynamic IP addressing
+- Mix both approaches in the same configuration file
 
 ## Security Features
 - Credentials are prompted interactively and never stored
@@ -114,3 +124,5 @@ Junos: 20.4R3
 ```csv
 Device,Status,Output
 NYC-router1,success,"Hostname: NYC-router1\nModel: MX240\nJunos: 20.4R3"
+
+```
