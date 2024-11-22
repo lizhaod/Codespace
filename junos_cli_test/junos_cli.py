@@ -222,6 +222,11 @@ def execute_command(device_info, command, credentials):
 def execute_commands_with_progress(devices, command, credentials):
     """Execute commands on all devices with a progress bar."""
     results = []
+    error_console = Console(stderr=True, highlight=False)
+    
+    # Clear screen and hide cursor
+    console.clear()
+    console.show_cursor(False)
     
     with Progress(
         SpinnerColumn(),
@@ -229,40 +234,59 @@ def execute_commands_with_progress(devices, command, credentials):
         BarColumn(),
         TaskProgressColumn(),
         TimeRemainingColumn(),
-        console=console
+        console=console,
+        transient=False,
+        refresh_per_second=10,
+        expand=True
     ) as progress:
-        # Create single progress task
-        task = progress.add_task(
-            f"[cyan]Executing command on {len(devices)} devices...",
-            total=len(devices)
-        )
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_device = {}
+        try:
+            # Create single progress task
+            task = progress.add_task(
+                f"[cyan]Executing command on {len(devices)} devices...",
+                total=len(devices)
+            )
             
-            # Submit all tasks
-            for device in devices:
-                future = executor.submit(execute_command, device, command, credentials)
-                future_to_device[future] = device
+            # Print a newline after progress bar for error messages
+            print("")
             
-            # Process completed tasks
-            for future in concurrent.futures.as_completed(future_to_device):
-                device = future_to_device[future]
-                try:
-                    result = future.result()
-                    # Update progress description to show current device
-                    progress.update(task, 
-                                 advance=1, 
-                                 description=f"[cyan]Processing {result['device']} ({future_to_device[future]['host']})...")
-                    results.append(result)
-                except Exception as e:
-                    results.append({
-                        'device': device['name'],
-                        'status': 'error',
-                        'output': f"Error: {str(e)}"
-                    })
-                    progress.update(task, advance=1)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_device = {}
+                
+                # Submit all tasks
+                for device in devices:
+                    future = executor.submit(execute_command, device, command, credentials)
+                    future_to_device[future] = device
+                
+                # Process completed tasks
+                for future in concurrent.futures.as_completed(future_to_device):
+                    device = future_to_device[future]
+                    try:
+                        result = future.result()
+                        # Update progress description to show current device
+                        progress.update(task, 
+                                     advance=1, 
+                                     description=f"[cyan]Processing {result['device']} ({future_to_device[future]['host']})...")
+                        results.append(result)
+                        
+                        # If there's an error in the result, display it
+                        if result['status'] == 'error':
+                            error_console.print(f"[red]{result['device']}: {result['output']}[/red]")
+                            
+                    except Exception as e:
+                        error_msg = f"Error: {str(e)}"
+                        results.append({
+                            'device': device['name'],
+                            'status': 'error',
+                            'output': error_msg
+                        })
+                        error_console.print(f"[red]{device['name']}: {error_msg}[/red]")
+                        progress.update(task, advance=1)
+                        
+        finally:
+            console.show_cursor(True)
     
+    # Add a newline after all processing is done
+    print("")
     return results
 
 def save_results(results, output_file):
