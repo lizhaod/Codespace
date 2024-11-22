@@ -13,6 +13,11 @@ This tool allows you to execute commands on multiple Junos devices simultaneousl
 - Save command outputs to files in multiple formats (JSON, CSV, TXT)
 - Filter devices by site code
 - Concurrent execution with proper error handling
+- Real-time progress tracking with:
+  - Overall progress bar
+  - Individual device connection status
+  - Estimated time remaining
+  - Task completion spinner
 
 ## Installation
 
@@ -91,6 +96,14 @@ This flexibility allows you to:
 - SSH key-based authentication is supported (recommended for production environments)
 
 ## Output Examples
+
+### Progress Display
+During command execution, you'll see:
+- Overall progress bar showing completion status
+- Individual device status updates
+- Estimated time remaining
+- Spinning indicator for active tasks
+- Color-coded device names and status indicators
 
 ### Terminal Output
 - Displays results in a formatted table with line dividers
