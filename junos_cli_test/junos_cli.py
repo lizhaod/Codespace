@@ -13,6 +13,8 @@ import logging
 from getpass import getpass
 from contextlib import contextmanager
 import argparse
+import json
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +41,9 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Junos Multi-Device CLI Tool')
     parser.add_argument('-s', '--site', 
                       help='Filter devices by site code (case-insensitive)',
+                      default='')
+    parser.add_argument('-o', '--output',
+                      help='Output file path (supports .json, .txt, or .csv formats)',
                       default='')
     return parser.parse_args()
 
@@ -70,6 +75,12 @@ def get_credentials():
 def execute_command(device_info, command, credentials):
     """Execute command on a single device and return the result."""
     username, password = credentials
+    
+    # Split command and grep pattern if exists
+    command_parts = command.split(' | grep ')
+    base_command = command_parts[0]
+    grep_pattern = command_parts[1] if len(command_parts) > 1 else None
+    
     try:
         with suppress_junos_logs():
             with Device(host=device_info['host'],
@@ -79,12 +90,20 @@ def execute_command(device_info, command, credentials):
                     port=22) as dev:
                 
                 # Execute command based on type
-                if command.startswith('show'):
-                    result = dev.cli(command, warning=False)
+                if base_command.startswith('show'):
+                    result = dev.cli(base_command, warning=False)
+                    
+                    # Apply grep filter if specified
+                    if grep_pattern:
+                        filtered_lines = []
+                        for line in result.split('\n'):
+                            if grep_pattern.lower() in line.lower():
+                                filtered_lines.append(line)
+                        result = '\n'.join(filtered_lines)
                 else:
                     # For configuration commands
                     with dev.config(mode='exclusive') as cu:
-                        cu.load(command, format='set')
+                        cu.load(base_command, format='set')
                         cu.commit()
                     result = "Configuration committed successfully"
                     
@@ -106,11 +125,43 @@ def execute_command(device_info, command, credentials):
             'output': f"Error: {str(e)}"
         }
 
-def display_results(results):
-    """Display results in a formatted table."""
-    table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("Device")
-    table.add_column("Status")
+def save_results(results, output_file):
+    """Save results to a file based on the file extension."""
+    # Get file extension
+    _, ext = os.path.splitext(output_file.lower())
+    
+    try:
+        if ext == '.json':
+            # Save as JSON
+            with open(output_file, 'w') as f:
+                json.dump(results, f, indent=2)
+        elif ext == '.csv':
+            # Save as CSV
+            import csv
+            with open(output_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['Device', 'Status', 'Output'])
+                for result in results:
+                    writer.writerow([result['device'], result['status'], result['output']])
+        else:
+            # Default to txt format
+            with open(output_file, 'w') as f:
+                for result in results:
+                    f.write(f"Device: {result['device']}\n")
+                    f.write(f"Status: {result['status']}\n")
+                    f.write("Output:\n")
+                    f.write(result['output'])
+                    f.write("\n" + "="*50 + "\n\n")
+        
+        console.print(f"\n[green]Results saved to {output_file}[/green]")
+    except Exception as e:
+        console.print(f"\n[red]Error saving results to {output_file}: {str(e)}[/red]")
+
+def display_results(results, output_file=None):
+    """Display results in a formatted table and optionally save to file."""
+    table = Table(show_header=True, header_style="bold magenta", show_lines=True)
+    table.add_column("Device", style="cyan")
+    table.add_column("Status", width=12)
     table.add_column("Output")
 
     for result in results:
@@ -122,6 +173,10 @@ def display_results(results):
         )
 
     console.print(table)
+    
+    # Save results if output file is specified
+    if output_file:
+        save_results(results, output_file)
 
 def main():
     """Main function to run the CLI tool."""
@@ -149,7 +204,7 @@ def main():
             
             if command.lower() == 'exit':
                 break
-
+                
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(devices)) as executor:
                 future_to_device = {
                     executor.submit(execute_command, device, command, credentials): device
@@ -161,10 +216,10 @@ def main():
                     result = future.result()
                     results.append(result)
 
-            display_results(results)
-
+            display_results(results, args.output)
+            
         except KeyboardInterrupt:
-            console.print("\n[red]Program interrupted by user[/red]")
+            console.print("\n[yellow]Operation cancelled by user[/yellow]")
             break
         except Exception as e:
             console.print(f"[red]Error: {str(e)}[/red]")

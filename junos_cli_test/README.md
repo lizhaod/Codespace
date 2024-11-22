@@ -5,10 +5,14 @@ This tool allows you to execute commands on multiple Junos devices simultaneousl
 ## Features
 - Connect to multiple Junos devices simultaneously
 - Execute CLI commands across all connected devices
-- Display results in a clear, formatted output
+- Display results in a clear, formatted table with line dividers
 - Support for both operational and configuration commands
 - Secure connection handling with error management
 - Interactive credential input (no stored passwords)
+- Command output filtering using grep
+- Save command outputs to files in multiple formats (JSON, CSV, TXT)
+- Filter devices by site code
+- Concurrent execution with proper error handling
 
 ## Installation
 
@@ -25,26 +29,49 @@ pip install -r requirements.txt
 
 ## Usage
 
-1. Update the `devices.csv` file with your device information
-2. Run the script:
+### Basic Usage
 ```bash
-python junos_cli.py
+python junos_cli.py                      # Basic usage with terminal output
+python junos_cli.py -s NYC               # Filter devices by site code
+python junos_cli.py -o results.json      # Save results to JSON file
+python junos_cli.py -s NYC -o output.txt # Combine site filter and output file
 ```
 
-3. Enter your username and password when prompted (these credentials will be used for all devices)
-4. Enter commands when prompted. The tool will execute them on all configured devices simultaneously.
+### Command-line Options
+- `-s, --site`: Filter devices by site code (case-insensitive)
+- `-o, --output`: Save results to a file (supports .json, .csv, or .txt formats)
+
+### Command Features
+1. Regular Commands:
+```
+show version
+show interfaces
+```
+
+2. Using Grep Filter:
+```
+show interfaces | grep ge-0
+show version | grep Model
+```
+
+### Output Formats
+When using the `-o` option, the following formats are supported:
+- `.json`: Full structured data (best for programmatic use)
+- `.csv`: Comma-separated values (good for spreadsheet applications)
+- `.txt`: Human-readable text format with clear separators
 
 ## Configuration
 
 Edit `devices.csv` to add your devices. The file should be in CSV format with the following columns:
-- name: Device name for identification
+- name: Device name for identification (can include site code)
 - host: IP address or hostname
 
 Example `devices.csv`:
 ```csv
 name,host
-router1,192.168.1.1
-router2,192.168.1.2
+NYC-router1,192.168.1.1
+NYC-router2,192.168.1.2
+LAX-router1,192.168.1.3
 ```
 
 ## Security Features
@@ -52,3 +79,38 @@ router2,192.168.1.2
 - Password input is masked during entry
 - Same credentials are used for all devices to simplify management
 - SSH key-based authentication is supported (recommended for production environments)
+
+## Output Examples
+
+### Terminal Output
+- Displays results in a formatted table with line dividers
+- Color-coded status indicators (green for success, red for errors)
+- Device names highlighted in cyan for better readability
+
+### File Output Examples
+1. JSON Format (results.json):
+```json
+[
+  {
+    "device": "NYC-router1",
+    "status": "success",
+    "output": "Hostname: NYC-router1\nModel: MX240\nJunos: 20.4R3"
+  }
+]
+```
+
+2. Text Format (results.txt):
+```
+Device: NYC-router1
+Status: success
+Output:
+Hostname: NYC-router1
+Model: MX240
+Junos: 20.4R3
+==================================================
+```
+
+3. CSV Format (results.csv):
+```csv
+Device,Status,Output
+NYC-router1,success,"Hostname: NYC-router1\nModel: MX240\nJunos: 20.4R3"
