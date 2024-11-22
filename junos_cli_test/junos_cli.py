@@ -231,21 +231,11 @@ def execute_commands_with_progress(devices, command, credentials):
         TimeRemainingColumn(),
         console=console
     ) as progress:
-        # Create the main task
-        overall_task = progress.add_task(
+        # Create single progress task
+        task = progress.add_task(
             f"[cyan]Executing command on {len(devices)} devices...",
             total=len(devices)
         )
-        
-        # Create a dict to store device-specific tasks
-        device_tasks = {
-            device['name']: progress.add_task(
-                f"[yellow]{device['name']} ({device['host']})",
-                total=1,
-                visible=True
-            )
-            for device in devices
-        }
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             future_to_device = {}
@@ -260,10 +250,10 @@ def execute_commands_with_progress(devices, command, credentials):
                 device = future_to_device[future]
                 try:
                     result = future.result()
-                    # Update progress for the device
-                    progress.update(device_tasks[device['name']], advance=1)
-                    # Update overall progress
-                    progress.update(overall_task, advance=1)
+                    # Update progress description to show current device
+                    progress.update(task, 
+                                 advance=1, 
+                                 description=f"[cyan]Processing {result['device']} ({future_to_device[future]['host']})...")
                     results.append(result)
                 except Exception as e:
                     results.append({
@@ -271,9 +261,7 @@ def execute_commands_with_progress(devices, command, credentials):
                         'status': 'error',
                         'output': f"Error: {str(e)}"
                     })
-                finally:
-                    # Hide completed device task
-                    progress.update(device_tasks[device['name']], visible=False)
+                    progress.update(task, advance=1)
     
     return results
 
