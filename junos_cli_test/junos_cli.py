@@ -11,22 +11,49 @@ from rich import print as rprint
 import sys
 import logging
 from getpass import getpass
-import socket
+from contextlib import contextmanager
+import argparse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Suppress all ncclient-related logs
+for logger_name in ['ncclient.transport.ssh', 'ncclient.transport.session', 'ncclient.operations.rpc']:
+    logging.getLogger(logger_name).setLevel(logging.WARNING)
+
 console = Console()
 
-def load_devices():
+@contextmanager
+def suppress_junos_logs():
+    """Temporarily suppress Junos connection logs."""
+    original_level = logging.getLogger('ncclient.transport.session').level
+    logging.getLogger('ncclient.transport.session').setLevel(logging.ERROR)
+    try:
+        yield
+    finally:
+        logging.getLogger('ncclient.transport.session').setLevel(original_level)
+
+def parse_arguments():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description='Junos Multi-Device CLI Tool')
+    parser.add_argument('-s', '--site', 
+                      help='Filter devices by site code (case-insensitive)',
+                      default='')
+    return parser.parse_args()
+
+def load_devices(site_filter=''):
     """Load device information from CSV file."""
     try:
         devices = []
         with open('devices.csv', 'r') as file:
             csv_reader = csv.DictReader(file)
             for row in csv_reader:
-                if row['host']:  # Only add if host is not empty
+                # Apply site filter if specified
+                if site_filter:
+                    if site_filter.lower() in row['name'].lower():
+                        devices.append(row)
+                else:
                     devices.append(row)
         return devices
     except Exception as e:
@@ -38,71 +65,39 @@ def get_credentials():
     console.print("\n[bold blue]Enter credentials for device access:[/bold blue]")
     username = Prompt.ask("Username")
     password = getpass("Password: ")
-    
-    # Ask for port number with default value
-    port = Prompt.ask("Port number (press Enter for default 830)", default="830")
-    return username, password, int(port)
+    return username, password
 
 def execute_command(device_info, command, credentials):
     """Execute command on a single device and return the result."""
-    username, password, port = credentials
+    username, password = credentials
     try:
-        # First, check if the port is open
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
-        result = sock.connect_ex((device_info['host'], port))
-        sock.close()
-        
-        if result != 0:
-            return {
-                'device': device_info['name'],
-                'status': 'error',
-                'output': f"Port {port} is not accessible. Please ensure NETCONF is enabled on the device:\n" +
-                         "1. Check if NETCONF is enabled: 'show configuration system services netconf'\n" +
-                         "2. To enable NETCONF, use: 'set system services netconf ssh'\n" +
-                         f"3. Verify port {port} is not blocked by firewall"
-            }
-
-        # Try to connect using PyEZ
-        dev = Device(host=device_info['host'],
+        with suppress_junos_logs():
+            with Device(host=device_info['host'],
                     user=username,
                     password=password,
-                    port=port,
-                    gather_facts=False)  # Skip fact gathering for faster connection
-        
-        dev.open()
-        try:
-            # Execute command based on type
-            if command.startswith('show'):
-                result = dev.cli(command, warning=False)
-            else:
-                # For configuration commands
-                with dev.config(mode='exclusive') as cu:
-                    cu.load(command, format='set')
-                    cu.commit()
-                result = "Configuration committed successfully"
-            
-            dev.close()
-            return {
-                'device': device_info['name'],
-                'status': 'success',
-                'output': result
-            }
-        except Exception as e:
-            dev.close()
-            raise e
-            
+                    auto_add_policy=True,  # Automatically accept SSH host keys
+                    port=22) as dev:
+                
+                # Execute command based on type
+                if command.startswith('show'):
+                    result = dev.cli(command, warning=False)
+                else:
+                    # For configuration commands
+                    with dev.config(mode='exclusive') as cu:
+                        cu.load(command, format='set')
+                        cu.commit()
+                    result = "Configuration committed successfully"
+                    
+                return {
+                    'device': device_info['name'],
+                    'status': 'success',
+                    'output': result
+                }
     except ConnectError as e:
-        error_msg = str(e)
-        if "connection refused" in error_msg.lower():
-            error_msg += "\nPossible causes:\n" + \
-                        "1. NETCONF is not enabled on the device\n" + \
-                        "2. Wrong port number (default is 830)\n" + \
-                        "3. Firewall blocking the connection"
         return {
             'device': device_info['name'],
             'status': 'error',
-            'output': f"Connection error: {error_msg}"
+            'output': f"Connection error: {str(e)}"
         }
     except Exception as e:
         return {
@@ -130,16 +125,27 @@ def display_results(results):
 
 def main():
     """Main function to run the CLI tool."""
-    devices = load_devices()
+    args = parse_arguments()
+    devices = load_devices(args.site)
+    
+    if not devices:
+        if args.site:
+            console.print(f"[red]No devices found matching site code: {args.site}[/red]")
+        else:
+            console.print("[red]No devices found in the configuration file[/red]")
+        sys.exit(1)
     
     console.print("[bold blue]Junos Multi-Device CLI Tool[/bold blue]")
+    if args.site:
+        console.print(f"[blue]Filtered by site: {args.site}[/blue]")
+    
     credentials = get_credentials()
     
     console.print("\nType 'exit' to quit the program\n")
 
     while True:
         try:
-            command = Prompt.ask("[yellow]Enter command[/yellow]")
+            command = Prompt.ask("[yellow]Enter command(type 'exit' to quit)[/yellow]")
             
             if command.lower() == 'exit':
                 break
