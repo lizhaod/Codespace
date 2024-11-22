@@ -1,4 +1,4 @@
-# Junos Multi-Device CLI Interaction Tool v1.0
+# Junos Multi-Device CLI Interaction Tool
 
 This tool allows you to execute commands on multiple Junos devices simultaneously and view their outputs in an organized manner.
 
@@ -67,7 +67,11 @@ When using the `-o` option, the following formats are supported:
 
 ## Configuration
 
-Edit `devices.csv` to add your devices. The file should be in CSV format with the following columns:
+Edit `devices.csv` to add your devices. The tool looks for `devices.csv` in the following locations:
+1. Current working directory (where you run the command from)
+2. Script directory (where junos_cli.py is located)
+
+The file should be in CSV format with the following columns:
 - name: Device name for identification (can include site code)
 - host: IP address or hostname (optional - if empty, the name will be used as the hostname)
 
