@@ -7,6 +7,7 @@ from jnpr.junos.exception import ConnectError
 from rich.console import Console
 from rich.table import Table
 from rich.prompt import Prompt
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 from rich import print as rprint
 import sys
 import logging
@@ -35,6 +36,36 @@ def suppress_junos_logs():
         yield
     finally:
         logging.getLogger('ncclient.transport.session').setLevel(original_level)
+
+class LogCapture:
+    """Context manager to capture and store log messages."""
+    def __init__(self):
+        self.messages = []
+        self.handler = None
+
+    def emit(self, record):
+        self.messages.append(self.handler.format(record))
+
+    def __enter__(self):
+        # Create a handler that stores messages
+        self.handler = logging.StreamHandler()
+        self.handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+        self.handler.emit = self.emit
+        
+        # Remove existing handlers and add our capture handler
+        logger.handlers = []
+        logger.addHandler(self.handler)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Restore default logging
+        logger.handlers = []
+        logger.addHandler(logging.StreamHandler())
+        
+    def display_logs(self):
+        """Display all captured log messages."""
+        for message in self.messages:
+            console.print(message)
 
 def parse_arguments():
     """Parse command line arguments."""
@@ -136,6 +167,73 @@ def execute_command(device_info, command, credentials):
             'output': error_msg
         }
 
+def execute_commands_with_progress(devices, command, credentials):
+    """Execute commands on all devices with a progress bar."""
+    results = []
+    
+    # Capture logs during execution
+    with LogCapture() as log_capture:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeRemainingColumn(),
+            console=console
+        ) as progress:
+            # Create the main task
+            overall_task = progress.add_task(
+                f"[cyan]Executing command on {len(devices)} devices...",
+                total=len(devices)
+            )
+            
+            # Create a dict to store device-specific tasks
+            device_tasks = {
+                device['name']: progress.add_task(
+                    f"[yellow]{device['name']} ({device['host']})",
+                    total=1,
+                    visible=False
+                )
+                for device in devices
+            }
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_device = {}
+                
+                # Submit all tasks
+                for device in devices:
+                    future = executor.submit(execute_command, device, command, credentials)
+                    future_to_device[future] = device
+                    # Make the device task visible when it starts
+                    progress.update(device_tasks[device['name']], visible=True)
+                
+                # Process completed tasks
+                for future in concurrent.futures.as_completed(future_to_device):
+                    device = future_to_device[future]
+                    try:
+                        result = future.result()
+                        # Update progress for the device
+                        progress.update(device_tasks[device['name']], advance=1)
+                        # Update overall progress
+                        progress.update(overall_task, advance=1)
+                        results.append(result)
+                    except Exception as e:
+                        logger.error(f"Error processing {device['name']}: {str(e)}")
+                        results.append({
+                            'device': device['name'],
+                            'status': 'error',
+                            'output': f"Error: {str(e)}"
+                        })
+                    finally:
+                        # Hide completed device task
+                        progress.update(device_tasks[device['name']], visible=False)
+        
+        # Display captured logs after progress bar is done
+        console.print("\n[bold blue]Connection Logs:[/bold blue]")
+        log_capture.display_logs()
+    
+    return results
+
 def save_results(results, output_file):
     """Save results to a file based on the file extension."""
     # Get file extension
@@ -215,18 +313,8 @@ def main():
             
             if command.lower() == 'exit':
                 break
-                
-            with concurrent.futures.ThreadPoolExecutor(max_workers=len(devices)) as executor:
-                future_to_device = {
-                    executor.submit(execute_command, device, command, credentials): device
-                    for device in devices
-                }
-                
-                results = []
-                for future in concurrent.futures.as_completed(future_to_device):
-                    result = future.result()
-                    results.append(result)
-
+            
+            results = execute_commands_with_progress(devices, command, credentials)
             display_results(results, args.output)
             
         except KeyboardInterrupt:
