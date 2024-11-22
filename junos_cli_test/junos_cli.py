@@ -116,88 +116,106 @@ def execute_command(device_info, command, credentials):
     base_command = command_parts[0]
     grep_pattern = command_parts[1] if len(command_parts) > 1 else None
     
-    try:
-        with suppress_junos_logs():
-            # Log connection attempt
-            logger.info(f"Connecting to {device_info['name']} ({device_info['host']})")
-            
-            # Enhanced SSH connection parameters
-            ssh_config = {
-                'StrictHostKeyChecking': 'no',
-                'UserKnownHostsFile': '/dev/null',
-                'ServerAliveInterval': '30',
-                'ServerAliveCountMax': '5',
-                'TCPKeepAlive': 'yes',
-                'ControlMaster': 'auto',
-                'ControlPersist': '10m',
-                'ConnectTimeout': '300',
-                'ConnectionAttempts': '3',
-                'GSSAPIAuthentication': 'no',
-                'PreferredAuthentications': 'password,keyboard-interactive',
-                'NumberOfPasswordPrompts': '3',
-                'KexAlgorithms': '+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1',
-                'Ciphers': '+aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc',
-                'HostKeyAlgorithms': '+ssh-rsa,ssh-dss',
-                'PubkeyAcceptedKeyTypes': '+ssh-rsa,ssh-dss'
-            }
-            
-            # Device connection with extended parameters
-            dev = Device(
-                host=device_info['host'],
-                user=username,
-                password=password,
-                port=22,
-                gather_facts=False,  # Skip fact gathering for faster connection
-                normalize=True,
-                timeout=300,  # Connection timeout in seconds (5 minutes)
-                attempts=3,   # Number of connection attempts
-                auto_probe=30,  # Auto probe every 30 seconds
-                ssh_config=None,  # Using custom ssh_options instead
-                ssh_private_key_file=None,
-                ssh_options=ssh_config
-            )
-            
-            with dev:
-                # Execute command based on type
-                if base_command.startswith('show'):
-                    result = dev.cli(base_command, warning=False)
-                    
-                    # Apply grep filter if specified
-                    if grep_pattern:
-                        filtered_lines = []
-                        for line in result.split('\n'):
-                            if grep_pattern.lower() in line.lower():
-                                filtered_lines.append(line)
-                        result = '\n'.join(filtered_lines)
-                else:
-                    # For configuration commands
-                    with dev.config(mode='exclusive') as cu:
-                        cu.load(base_command, format='set')
-                        cu.commit()
-                    result = "Configuration committed successfully"
-                    
-                return {
-                    'device': device_info['name'],
-                    'status': 'success',
-                    'output': result
-                }
+    # Enhanced SSH connection parameters
+    ssh_config = {
+        'StrictHostKeyChecking': 'no',
+        'UserKnownHostsFile': '/dev/null',
+        'ServerAliveInterval': '30',
+        'ServerAliveCountMax': '5',
+        'TCPKeepAlive': 'yes',
+        'ControlMaster': 'auto',
+        'ControlPersist': '10m',
+        'ConnectTimeout': '300',
+        'ConnectionAttempts': '3',
+        'GSSAPIAuthentication': 'no',
+        'PreferredAuthentications': 'password,keyboard-interactive',
+        'NumberOfPasswordPrompts': '3',
+        'KexAlgorithms': '+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1',
+        'Ciphers': '+aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc',
+        'HostKeyAlgorithms': '+ssh-rsa,ssh-dss',
+        'PubkeyAcceptedKeyTypes': '+ssh-rsa,ssh-dss'
+    }
+    
+    # Common device parameters
+    device_params = {
+        'host': device_info['host'],
+        'user': username,
+        'password': password,
+        'gather_facts': False,  # Skip fact gathering for faster connection
+        'normalize': True,
+        'timeout': 300,  # Connection timeout in seconds (5 minutes)
+        'attempts': 3,   # Number of connection attempts
+        'auto_probe': 30,  # Auto probe every 30 seconds
+        'ssh_config': None,  # Using custom ssh_options instead
+        'ssh_private_key_file': None,
+        'ssh_options': ssh_config
+    }
+    
+    def try_connection(port):
+        """Try to connect using specified port."""
+        try:
+            with suppress_junos_logs():
+                # Log connection attempt
+                logger.info(f"Connecting to {device_info['name']} ({device_info['host']}) on port {port}")
                 
-    except ConnectError as e:
-        error_msg = f"Connection error: {str(e)}"
-        logger.error(f"Failed to connect to {device_info['name']} ({device_info['host']}): {error_msg}")
-        return {
-            'device': device_info['name'],
-            'status': 'error',
-            'output': error_msg
-        }
-    except Exception as e:
-        error_msg = f"Error: {str(e)}"
-        logger.error(f"Error with {device_info['name']} ({device_info['host']}): {error_msg}")
-        return {
-            'device': device_info['name'],
-            'status': 'error',
-            'output': error_msg
-        }
+                # Update device parameters with current port
+                dev_params = device_params.copy()
+                dev_params['port'] = port
+                
+                # Attempt connection
+                dev = Device(**dev_params)
+                
+                with dev:
+                    # Execute command based on type
+                    if base_command.startswith('show'):
+                        result = dev.cli(base_command, warning=False)
+                        
+                        # Apply grep filter if specified
+                        if grep_pattern:
+                            filtered_lines = []
+                            for line in result.split('\n'):
+                                if grep_pattern.lower() in line.lower():
+                                    filtered_lines.append(line)
+                            result = '\n'.join(filtered_lines)
+                    else:
+                        # For configuration commands
+                        with dev.config(mode='exclusive') as cu:
+                            cu.load(base_command, format='set')
+                            cu.commit()
+                        result = "Configuration committed successfully"
+                        
+                    return {
+                        'device': device_info['name'],
+                        'status': 'success',
+                        'output': result
+                    }
+                    
+        except ConnectError as e:
+            logger.warning(f"Failed to connect on port {port}: {str(e)}")
+            return None
+        except Exception as e:
+            logger.error(f"Error on port {port}: {str(e)}")
+            return None
+    
+    # Try NETCONF port first (830)
+    result = try_connection(830)
+    if result:
+        return result
+        
+    # Fallback to SSH port (22)
+    logger.info(f"Retrying connection to {device_info['name']} using SSH port 22")
+    result = try_connection(22)
+    if result:
+        return result
+    
+    # If both attempts fail, return error
+    error_msg = "Failed to connect on both NETCONF (830) and SSH (22) ports"
+    logger.error(f"{error_msg} for device {device_info['name']} ({device_info['host']})")
+    return {
+        'device': device_info['name'],
+        'status': 'error',
+        'output': error_msg
+    }
 
 def execute_commands_with_progress(devices, command, credentials):
     """Execute commands on all devices with a progress bar."""
