@@ -1,0 +1,31 @@
+devices:
+  - hostname: switch1.example.com
+    ip: 192.168.1.1
+    type: cisco_ios
+    username: admin
+    password: your_password
+    enable_secret: your_enable_password
+
+  - hostname: router1.example.com
+    ip: 192.168.1.2
+    type: cisco_ios
+    username: admin
+    password: your_password
+    enable_secret: your_enable_password
+
+discovery:
+  protocols:
+    - lldp
+    - ospf
+    - bgp
+    - isis
+  timeout: 30
+  retry_count: 3
+
+visualization:
+  layout: spring  # Options: spring, circular, spectral, shell
+  node_size: 2000
+  node_color: lightblue
+  edge_color: gray
+  font_size: 8
+  output_format: png  # Options: png, svg, dot
